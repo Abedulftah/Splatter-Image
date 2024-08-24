@@ -1,3 +1,4 @@
+from matplotlib import pyplot as plt
 import torch
 import torch.nn as nn
 import torchvision 
@@ -483,15 +484,26 @@ class GaussianSplatPredictor(nn.Module):
 
         if cfg.model.network_with_offset:
             split_dimensions, scale_inits, bias_inits = self.get_splits_and_inits(True, cfg)
-            self.network_with_offset = networkCallBack(cfg, 
+            self.forward_network_with_offset = networkCallBack(cfg, 
                                         cfg.model.name,
                                         split_dimensions,
                                         scale = scale_inits,
                                         bias = bias_inits)
+            self.back_network_with_offset = networkCallBack(cfg,
+                                        cfg.model.name,
+                                        split_dimensions,
+                                        scale = scale_inits,
+                                        bias = bias_inits)
+            
             assert not cfg.model.network_without_offset, "Can only have one network"
         if cfg.model.network_without_offset:
             split_dimensions, scale_inits, bias_inits = self.get_splits_and_inits(False, cfg)
-            self.network_wo_offset = networkCallBack(cfg, 
+            self.forward_network_wo_offset = networkCallBack(cfg, 
+                                        cfg.model.name,
+                                        split_dimensions,
+                                        scale = scale_inits,
+                                        bias = bias_inits)
+            self.back_network_wo_offset = networkCallBack(cfg,
                                         cfg.model.name,
                                         split_dimensions,
                                         scale = scale_inits,
@@ -603,6 +615,8 @@ class GaussianSplatPredictor(nn.Module):
 
     def multi_view_union(self, tensor_dict, B, N_view):
         for t_name, t in tensor_dict.items():
+            if t_name == "depth":
+                continue
             t = t.reshape(B, N_view, *t.shape[1:])
             tensor_dict[t_name] = t.reshape(B, N_view * t.shape[2], *t.shape[3:])
         return tensor_dict
@@ -667,6 +681,7 @@ class GaussianSplatPredictor(nn.Module):
         # expands ray dirs along the batch dimension
         # adjust ray directions according to fov if not done already
         ray_dirs_xy = self.ray_dirs.expand(depth_network.shape[0], 3, *self.ray_dirs.shape[2:])
+
         if self.cfg.data.category in ["hydrants", "teddybears"]:
             assert torch.all(focals_pixels > 0)
             ray_dirs_xy = ray_dirs_xy.clone()
@@ -677,17 +692,31 @@ class GaussianSplatPredictor(nn.Module):
             depth = self.depth_act(depth_network) * (self.cfg.data.zfar - self.cfg.data.znear) + self.cfg.data.znear + const_offset
         else:
             depth = self.depth_act(depth_network) * (self.cfg.data.zfar - self.cfg.data.znear) + self.cfg.data.znear
-
+        
+        def normalize_tensor_to_255(tensor):
+            min_val = tensor.min()
+            max_val = tensor.max()
+            
+            if max_val - min_val == 0:
+                return torch.zeros_like(tensor)
+            normalized_tensor = (tensor - min_val) / (max_val - min_val)
+            
+            return normalized_tensor
+        
+        normalized_depth = normalize_tensor_to_255(depth)
+        # for i in range(128):
+        #     for j in range(1, 128):
+        #         if abs(normalized_depth[0][0][i][j] - normalized_depth[0][0][i][j - 1]) >= 0.02:
+        #             depth[0][0][i][j] = 1.0
         pos = ray_dirs_xy * depth + offset
-
-        return pos
+        # d = depth * ray_dirs_xy + offset
+        return pos, depth
 
     def forward(self, x, 
                 source_cameras_view_to_world, 
                 source_cv2wT_quat=None,
                 focals_pixels=None,
                 activate_output=True):
-
         B = x.shape[0]
         N_views = x.shape[1]
         # UNet attention will reshape outputs so that there is cross-view attention
@@ -707,7 +736,7 @@ class GaussianSplatPredictor(nn.Module):
             assert focals_pixels is not None
             focals_pixels = focals_pixels.reshape(B*N_views, *focals_pixels.shape[2:])
         else:
-            assert focals_pixels is None, "Unexpected argument for non-co3d dataset" 
+            assert focals_pixels is None, "Unexpected argument for non-co3d dataset"
 
         x = x.reshape(B*N_views, *x.shape[2:])
         if self.cfg.data.origin_distances:
@@ -721,76 +750,131 @@ class GaussianSplatPredictor(nn.Module):
 
         if self.cfg.model.network_with_offset:
 
-            split_network_outputs = self.network_with_offset(x,
+            forward_split_network_outputs = self.forward_network_with_offset(x,
                                                              film_camera_emb=film_camera_emb,
                                                              N_views_xa=N_views_xa
                                                              )
+            back_split_network_outputs = self.back_network_with_offset(x,
+                                                                film_camera_emb=film_camera_emb,
+                                                                N_views_xa=N_views_xa
+                                                                )
 
-            split_network_outputs = split_network_outputs.split(self.split_dimensions_with_offset, dim=1)
-            depth, offset, opacity, scaling, rotation, features_dc = split_network_outputs[:6]
+            forward_split_network_outputs = forward_split_network_outputs.split(self.split_dimensions_with_offset, dim=1)
+            forward_depth, forward_offset, forward_opacity, forward_scaling, forward_rotation, forward_features_dc = forward_split_network_outputs[:6]
+            back_split_network_outputs = back_split_network_outputs.split(self.split_dimensions_with_offset, dim=1)
+            back_depth, back_offset, back_opacity, back_scaling, back_rotation, back_features_dc = back_split_network_outputs[:6]
             if self.cfg.model.max_sh_degree > 0:
-                features_rest = split_network_outputs[6]
+                forward_features_rest = forward_split_network_outputs[6]
+                back_features_rest = back_split_network_outputs[6]
 
-            pos = self.get_pos_from_network_output(depth, offset, focals_pixels, const_offset=const_offset)
+            forward_pos, forward_newDepth = self.get_pos_from_network_output(forward_depth, forward_offset, focals_pixels, const_offset=const_offset)
+            back_pos, back_newDepth = self.get_pos_from_network_output(back_depth, back_offset, focals_pixels, const_offset=const_offset)
+
 
         else:
-            split_network_outputs = self.network_wo_offset(x, 
+            forward_split_network_outputs = self.forward_network_wo_offset(x, 
                                                            film_camera_emb=film_camera_emb,
                                                            N_views_xa=N_views_xa
                                                            ).split(self.split_dimensions_without_offset, dim=1)
+            back_split_network_outputs = self.back_network_wo_offset(x, 
+                                                        film_camera_emb=film_camera_emb,
+                                                        N_views_xa=N_views_xa
+                                                        ).split(self.split_dimensions_without_offset, dim=1)
 
-            depth, opacity, scaling, rotation, features_dc = split_network_outputs[:5]
+            forward_depth, forward_opacity, forward_scaling, forward_rotation, forward_features_dc = forward_split_network_outputs[:5]
+            back_depth, back_opacity, back_scaling, back_rotation, back_features_dc = back_split_network_outputs[:5]
             if self.cfg.model.max_sh_degree > 0:
-                features_rest = split_network_outputs[5]
+                forward_features_rest = forward_split_network_outputs[5]
+                back_features_rest = back_split_network_outputs[5]
 
-            pos = self.get_pos_from_network_output(depth, 0.0, focals_pixels, const_offset=const_offset)
+            forward_pos, forward_newDepth = self.get_pos_from_network_output(forward_depth, 0.0, focals_pixels, const_offset=const_offset)
+            back_pos, back_newDepth = self.get_pos_from_network_output(back_depth, 0.0, focals_pixels, const_offset=const_offset)
 
         if self.cfg.model.isotropic:
-            scaling_out = torch.cat([scaling[:, :1, ...], scaling[:, :1, ...], scaling[:, :1, ...]], dim=1)
+            foward_scaling_out = torch.cat([forward_scaling[:, :1, ...], forward_scaling[:, :1, ...], forward_scaling[:, :1, ...]], dim=1)
+            back_scaling_out = torch.cat([back_scaling[:, :1, ...], back_scaling[:, :1, ...], back_scaling[:, :1, ...]], dim=1)
         else:
-            scaling_out = scaling
+            foward_scaling_out = forward_scaling
+            back_scaling_out = back_scaling
 
         # Pos prediction is in camera space - compute the positions in the world space
-        pos = self.flatten_vector(pos)
-        pos = torch.cat([pos, 
-                         torch.ones((pos.shape[0], pos.shape[1], 1), device=pos.device, dtype=torch.float32)
+        forward_pos = self.flatten_vector(forward_pos)
+        forward_pos = torch.cat([forward_pos, 
+                         torch.ones((forward_pos.shape[0], forward_pos.shape[1], 1), device=forward_pos.device, dtype=torch.float32)
                          ], dim=2)
-        pos = torch.bmm(pos, source_cameras_view_to_world)
-        pos = pos[:, :, :3] / (pos[:, :, 3:] + 1e-10)
+        forward_pos = torch.bmm(forward_pos, source_cameras_view_to_world)
+        forward_pos = forward_pos[:, :, :3] / (forward_pos[:, :, 3:] + 1e-10)
+
+        back_pos = self.flatten_vector(back_pos)
+        back_pos = torch.cat([back_pos,
+                            torch.ones((back_pos.shape[0], back_pos.shape[1], 1), device=back_pos.device, dtype=torch.float32)
+                            ], dim=2)
+        back_pos = torch.bmm(back_pos, source_cameras_view_to_world)
+        back_pos = back_pos[:, :, :3] / (back_pos[:, :, 3:] + 1e-10)
+
+        forward_out_dict = {
+            "xyz": forward_pos, 
+            "depth": forward_newDepth.squeeze(0),
+            "rotation": self.flatten_vector(self.rotation_activation(forward_rotation)),
+            "features_dc": self.flatten_vector(forward_features_dc).unsqueeze(2)
+            }
         
-        out_dict = {
-            "xyz": pos, 
-            "rotation": self.flatten_vector(self.rotation_activation(rotation)),
-            "features_dc": self.flatten_vector(features_dc).unsqueeze(2)
-                }
+        back_out_dict = {
+            "xyz": back_pos, 
+            "depth": back_newDepth.squeeze(0),
+            "rotation": self.flatten_vector(self.rotation_activation(back_rotation)),
+            "features_dc": self.flatten_vector(back_features_dc).unsqueeze(2)
+            }
 
         if activate_output:
-            out_dict["opacity"] = self.flatten_vector(self.opacity_activation(opacity))
-            out_dict["scaling"] = self.flatten_vector(self.scaling_activation(scaling_out))
+            forward_out_dict["opacity"] = self.flatten_vector(self.opacity_activation(forward_opacity))
+            forward_out_dict["scaling"] = self.flatten_vector(self.scaling_activation(foward_scaling_out))
+
+            back_out_dict["opacity"] = self.flatten_vector(self.opacity_activation(back_opacity))
+            back_out_dict["scaling"] = self.flatten_vector(self.scaling_activation(back_scaling_out))
         else:
-            out_dict["opacity"] = self.flatten_vector(opacity)
-            out_dict["scaling"] = self.flatten_vector(scaling_out)
+            forward_out_dict["opacity"] = self.flatten_vector(forward_opacity)
+            forward_out_dict["scaling"] = self.flatten_vector(foward_scaling_out)
+
+            back_out_dict["opacity"] = self.flatten_vector(back_opacity)
+            back_out_dict["scaling"] = self.flatten_vector(back_scaling_out)
 
         assert source_cv2wT_quat is not None
         source_cv2wT_quat = source_cv2wT_quat.reshape(B*N_views, *source_cv2wT_quat.shape[2:])
-        out_dict["rotation"] = self.transform_rotations(out_dict["rotation"], 
+        forward_out_dict["rotation"] = self.transform_rotations(forward_out_dict["rotation"], 
+                    source_cv2wT_quat=source_cv2wT_quat)
+        back_out_dict["rotation"] = self.transform_rotations(back_out_dict["rotation"],
                     source_cv2wT_quat=source_cv2wT_quat)
 
         if self.cfg.model.max_sh_degree > 0:
-            features_rest = self.flatten_vector(features_rest)
+            forward_features_rest = self.flatten_vector(forward_features_rest)
             # Channel dimension holds SH_num * RGB(3) -> renderer expects split across RGB
             # Split channel dimension B x N x C -> B x N x SH_num x 3
-            out_dict["features_rest"] = features_rest.reshape(*features_rest.shape[:2], -1, 3)
+            forward_out_dict["features_rest"] = forward_features_rest.reshape(*forward_features_rest.shape[:2], -1, 3)
             assert self.cfg.model.max_sh_degree == 1 # "Only accepting degree 1"
-            out_dict["features_rest"] = self.transform_SHs(out_dict["features_rest"],
+            forward_out_dict["features_rest"] = self.transform_SHs(forward_out_dict["features_rest"],
+                                                           source_cameras_view_to_world)
+            
+            back_features_rest = self.flatten_vector(back_features_rest)
+            back_out_dict["features_rest"] = back_features_rest.reshape(*back_features_rest.shape[:2], -1, 3)
+            assert self.cfg.model.max_sh_degree == 1
+            back_out_dict["features_rest"] = self.transform_SHs(back_out_dict["features_rest"],
                                                            source_cameras_view_to_world)
         else:    
-            out_dict["features_rest"] = torch.zeros((out_dict["features_dc"].shape[0], 
-                                                     out_dict["features_dc"].shape[1], 
+            forward_out_dict["features_rest"] = torch.zeros((forward_out_dict["features_dc"].shape[0], 
+                                                     forward_out_dict["features_dc"].shape[1], 
                                                      (self.cfg.model.max_sh_degree + 1) ** 2 - 1,
-                                                     3), dtype=out_dict["features_dc"].dtype, device="cuda")
+                                                     3), dtype=forward_out_dict["features_dc"].dtype, device="cuda")
+            
+            back_out_dict["features_rest"] = torch.zeros((back_out_dict["features_dc"].shape[0],
+                                                        back_out_dict["features_dc"].shape[1],
+                                                        (self.cfg.model.max_sh_degree + 1) ** 2 - 1,
+                                                        3), dtype=back_out_dict["features_dc"].dtype, device="cuda")
 
-        out_dict = self.multi_view_union(out_dict, B, N_views)
-        out_dict = self.make_contiguous(out_dict)
+        forward_out_dict = self.multi_view_union(forward_out_dict, B, N_views)
+        forward_out_dict = self.make_contiguous(forward_out_dict)
 
-        return out_dict
+        back_out_dict = self.multi_view_union(back_out_dict, B, N_views)
+        back_out_dict = self.make_contiguous(back_out_dict)
+
+        return forward_out_dict, back_out_dict
