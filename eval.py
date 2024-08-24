@@ -2,10 +2,12 @@ import argparse
 import json
 import os
 import sys
+import numpy as np
 import tqdm
 from omegaconf import OmegaConf
 
 from huggingface_hub import hf_hub_download
+import matplotlib.pyplot as plt
 
 import lpips as lpips_lib
 
@@ -58,8 +60,10 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
     psnr_all_examples_cond = []
     ssim_all_examples_cond = []
     lpips_all_examples_cond = []
-
+    meow = 0
     for d_idx, data in enumerate(tqdm.tqdm(dataloader)):
+        if meow == 2:
+            break
         psnr_all_renders_novel = []
         ssim_all_renders_novel = []
         lpips_all_renders_novel = []
@@ -93,26 +97,35 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
             os.makedirs(out_example, exist_ok=True)
 
         # batch has length 1, the first image is conditioning
-        reconstruction = model(input_images,
+        forward_reconstruction, back_reconstruction = model(input_images,
                                data["view_to_world_transforms"][:, :model_cfg.data.input_images, ...],
                                rot_transform_quats,
                                focals_pixels_pred)
+            
+        gau = forward_reconstruction['xyz'].squeeze(0).permute(1, 0).reshape(3, 64, 64)
+        torchvision.utils.save_image(gau, os.path.join(out_example, "gaussians.png"))
+        torchvision.utils.save_image(forward_reconstruction['depth'], os.path.join(out_example, "depth.png"))
+
+        forward_gaussian_splat_batch = {k: v[0].contiguous() for k, v in forward_reconstruction.items()}
+        back_gaussian_splats_batch = {k: v[0].contiguous() for k, v in back_reconstruction.items()}
+        gaussian_splat_batch = {'back': back_gaussian_splats_batch, 'forward': forward_gaussian_splat_batch}
 
         for r_idx in range( data["gt_images"].shape[1]):
+
             if "focals_pixels" in data.keys():
                 focals_pixels_render = data["focals_pixels"][0, r_idx]
             else:
                 focals_pixels_render = None
-            image = render_predicted({k: v[0].contiguous() for k, v in reconstruction.items()},
+            res = render_predicted(gaussian_splat_batch,
                                      data["world_view_transforms"][0, r_idx],
                                      data["full_proj_transforms"][0, r_idx], 
                                      data["camera_centers"][0, r_idx],
                                      background,
                                      model_cfg,
-                                     focals_pixels=focals_pixels_render)["render"]
-
+                                     focals_pixels=focals_pixels_render)
+            image = res['render']
             if d_idx < save_vis:
-                # vis_image_preds(reconstruction, out_example) 
+                # vis_image_preds(reconstruction, out_example)
                 torchvision.utils.save_image(image, os.path.join(out_example, '{0:05d}'.format(r_idx) + ".png"))
                 torchvision.utils.save_image(data["gt_images"][0, r_idx, ...], os.path.join(out_example_gt, '{0:05d}'.format(r_idx) + ".png"))
 
@@ -141,6 +154,8 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
                     " " + str(psnr_all_examples_novel[-1]) + \
                     " " + str(ssim_all_examples_novel[-1]) + \
                     " " + str(lpips_all_examples_novel[-1]) + "\n")
+        
+        meow += 1
 
     scores = {"PSNR_cond": sum(psnr_all_examples_cond) / len(psnr_all_examples_cond),
               "SSIM_cond": sum(ssim_all_examples_cond) / len(ssim_all_examples_cond),
