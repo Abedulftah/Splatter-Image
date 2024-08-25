@@ -103,6 +103,7 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
                                focals_pixels_pred)
             
         gau = forward_reconstruction['xyz'].squeeze(0).permute(1, 0).reshape(3, 64, 64)
+        gau1 = back_reconstruction['xyz'].squeeze(0).permute(1, 0).reshape(3, 64, 64)
         torchvision.utils.save_image(gau, os.path.join(out_example, "gaussians.png"))
         torchvision.utils.save_image(forward_reconstruction['depth'], os.path.join(out_example, "depth.png"))
 

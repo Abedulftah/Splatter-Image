@@ -86,7 +86,7 @@ def render_predicted(pc : dict,
         back_colors_precomp = override_color
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
-    forward_rendered_image, forward_radii = rasterizer(
+    forward_rendered_image, forward_radii, depth1 = rasterizer(
         means3D = forward_means3D,
         means2D = forward_means2D,
         shs = forward_shs,
@@ -96,7 +96,7 @@ def render_predicted(pc : dict,
         rotations = forward_rotations,
         cov3D_precomp = forward_cov3D_precomp)
     
-    back_rendered_image, back_radii = rasterizer(
+    back_rendered_image, back_radii, depth2 = rasterizer(
         means3D = back_means3D,
         means2D = back_means2D,
         shs = back_shs,
@@ -106,11 +106,13 @@ def render_predicted(pc : dict,
         rotations = back_rotations,
         cov3D_precomp = back_cov3D_precomp)
     
-    forward_radii = forward_radii.reshape(64, 64).unsqueeze(0)
-    back_radii = back_radii.reshape(64, 64).unsqueeze(0)
+
+    d = depth1[0, :, :] > depth2[0, :, :]
+
+
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
-    rendered_image = forward_rendered_image * (forward_radii > 0) + back_rendered_image * (forward_radii <= 0)
+    rendered_image = (forward_rendered_image * ~d) + (back_rendered_image * d)
 
     return {"render": rendered_image,
             "viewspace_points": forward_screenspace_points,
