@@ -112,7 +112,7 @@ def render_predicted(pc : dict,
 
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
-    rendered_image = (forward_rendered_image * ~d) + (back_rendered_image * d)
+    rendered_image = (forward_rendered_image * d) + (back_rendered_image * ~d)
 
     return {"render": rendered_image,
             "viewspace_points": forward_screenspace_points,

@@ -102,10 +102,10 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
                                rot_transform_quats,
                                focals_pixels_pred)
             
-        gau = forward_reconstruction['xyz'].squeeze(0).permute(1, 0).reshape(3, 64, 64)
-        gau1 = back_reconstruction['xyz'].squeeze(0).permute(1, 0).reshape(3, 64, 64)
-        torchvision.utils.save_image(gau, os.path.join(out_example, "gaussians.png"))
-        torchvision.utils.save_image(forward_reconstruction['depth'], os.path.join(out_example, "depth.png"))
+        # gau = forward_reconstruction['xyz'].squeeze(0).permute(1, 0).reshape(3, 64, 64)
+        # gau1 = back_reconstruction['xyz'].squeeze(0).permute(1, 0).reshape(3, 64, 64)
+        # torchvision.utils.save_image(gau, os.path.join(out_example, "gaussians.png"))
+        # torchvision.utils.save_image(forward_reconstruction['depth'], os.path.join(out_example, "depth.png"))
 
         forward_gaussian_splat_batch = {k: v[0].contiguous() for k, v in forward_reconstruction.items()}
         back_gaussian_splats_batch = {k: v[0].contiguous() for k, v in back_reconstruction.items()}
