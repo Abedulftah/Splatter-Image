@@ -102,10 +102,17 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
                                rot_transform_quats,
                                focals_pixels_pred)
             
-        # gau = forward_reconstruction['xyz'].squeeze(0).permute(1, 0).reshape(3, 64, 64)
-        # gau1 = back_reconstruction['xyz'].squeeze(0).permute(1, 0).reshape(3, 64, 64)
-        # torchvision.utils.save_image(gau, os.path.join(out_example, "gaussians.png"))
-        # torchvision.utils.save_image(forward_reconstruction['depth'], os.path.join(out_example, "depth.png"))
+        gau = forward_reconstruction['xyz'].squeeze(0).permute(1, 0).reshape(3, 64, 64)
+        gau1 = back_reconstruction['xyz'].squeeze(0).permute(1, 0).reshape(3, 64, 64)
+        depth1 = forward_reconstruction['depth'].squeeze(0).reshape(1, 64, 64)
+        depth2 = back_reconstruction['depth'].squeeze(0).reshape(1, 64, 64)
+
+        torchvision.utils.save_image(gau, os.path.join(out_example, "forward_gaussians.png"))
+        torchvision.utils.save_image(gau1, os.path.join(out_example, "back_gaussians.png"))
+        torchvision.utils.save_image(depth1, os.path.join(out_example, "forward_depth.png"))
+        torchvision.utils.save_image(depth2, os.path.join(out_example, "back_depth.png"))
+        # for i in range(64):
+        #     print(depth2[0, i])
 
         forward_gaussian_splat_batch = {k: v[0].contiguous() for k, v in forward_reconstruction.items()}
         back_gaussian_splats_batch = {k: v[0].contiguous() for k, v in back_reconstruction.items()}

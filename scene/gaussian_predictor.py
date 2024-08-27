@@ -484,12 +484,7 @@ class GaussianSplatPredictor(nn.Module):
 
         if cfg.model.network_with_offset:
             split_dimensions, scale_inits, bias_inits = self.get_splits_and_inits(True, cfg)
-            self.forward_network_with_offset = networkCallBack(cfg, 
-                                        cfg.model.name,
-                                        split_dimensions,
-                                        scale = scale_inits,
-                                        bias = bias_inits)
-            self.back_network_with_offset = networkCallBack(cfg,
+            self.network_with_offset = networkCallBack(cfg, 
                                         cfg.model.name,
                                         split_dimensions,
                                         scale = scale_inits,
@@ -498,12 +493,7 @@ class GaussianSplatPredictor(nn.Module):
             assert not cfg.model.network_without_offset, "Can only have one network"
         if cfg.model.network_without_offset:
             split_dimensions, scale_inits, bias_inits = self.get_splits_and_inits(False, cfg)
-            self.forward_network_wo_offset = networkCallBack(cfg, 
-                                        cfg.model.name,
-                                        split_dimensions,
-                                        scale = scale_inits,
-                                        bias = bias_inits)
-            self.back_network_wo_offset = networkCallBack(cfg,
+            self.network_wo_offset = networkCallBack(cfg, 
                                         cfg.model.name,
                                         split_dimensions,
                                         scale = scale_inits,
@@ -565,7 +555,7 @@ class GaussianSplatPredictor(nn.Module):
         bias_inits = []
 
         if with_offset:
-            split_dimensions = split_dimensions + [1, 3, 1, 3, 4, 3]
+            split_dimensions = split_dimensions + [1, 3, 1, 3, 4, 3] + [1, 3, 1, 3, 4, 3]
             scale_inits = scale_inits + [cfg.model.depth_scale, 
                            cfg.model.xyz_scale, 
                            cfg.model.opacity_scale, 
@@ -579,7 +569,7 @@ class GaussianSplatPredictor(nn.Module):
                           0.0,
                           0.0]
         else:
-            split_dimensions = split_dimensions + [1, 1, 3, 4, 3]
+            split_dimensions = split_dimensions + [1, 1, 3, 4, 3] + [1, 1, 3, 4, 3]
             scale_inits = scale_inits + [cfg.model.depth_scale, 
                            cfg.model.opacity_scale, 
                            cfg.model.scale_scale,
@@ -594,6 +584,7 @@ class GaussianSplatPredictor(nn.Module):
         if cfg.model.max_sh_degree != 0:
             sh_num = (self.cfg.model.max_sh_degree + 1) ** 2 - 1
             sh_num_rgb = sh_num * 3
+            split_dimensions.append(sh_num_rgb)
             split_dimensions.append(sh_num_rgb)
             scale_inits.append(0.0)
             bias_inits.append(0.0)
@@ -615,8 +606,6 @@ class GaussianSplatPredictor(nn.Module):
 
     def multi_view_union(self, tensor_dict, B, N_view):
         for t_name, t in tensor_dict.items():
-            if t_name == "depth":
-                continue
             t = t.reshape(B, N_view, *t.shape[1:])
             tensor_dict[t_name] = t.reshape(B, N_view * t.shape[2], *t.shape[3:])
         return tensor_dict
@@ -710,7 +699,7 @@ class GaussianSplatPredictor(nn.Module):
         #             depth[0][0][i][j] = 1.0
         pos = ray_dirs_xy * depth + offset
         # d = depth * ray_dirs_xy + offset
-        return pos, depth
+        return pos, normalized_depth
 
     def forward(self, x, 
                 source_cameras_view_to_world, 
@@ -750,42 +739,30 @@ class GaussianSplatPredictor(nn.Module):
 
         if self.cfg.model.network_with_offset:
 
-            forward_split_network_outputs = self.forward_network_with_offset(x,
+            split_network_outputs = self.network_with_offset(x,
                                                              film_camera_emb=film_camera_emb,
                                                              N_views_xa=N_views_xa
                                                              )
-            back_split_network_outputs = self.back_network_with_offset(x,
-                                                                film_camera_emb=film_camera_emb,
-                                                                N_views_xa=N_views_xa
-                                                                )
 
-            forward_split_network_outputs = forward_split_network_outputs.split(self.split_dimensions_with_offset, dim=1)
-            forward_depth, forward_offset, forward_opacity, forward_scaling, forward_rotation, forward_features_dc = forward_split_network_outputs[:6]
-            back_split_network_outputs = back_split_network_outputs.split(self.split_dimensions_with_offset, dim=1)
-            back_depth, back_offset, back_opacity, back_scaling, back_rotation, back_features_dc = back_split_network_outputs[:6]
+            split_network_outputs = split_network_outputs.split(self.split_dimensions_with_offset, dim=1)
+            forward_depth, forward_offset, forward_opacity, forward_scaling, forward_rotation, forward_features_dc, back_depth, back_offset, back_opacity, back_scaling, back_rotation, back_features_dc = split_network_outputs[:12]
             if self.cfg.model.max_sh_degree > 0:
-                forward_features_rest = forward_split_network_outputs[6]
-                back_features_rest = back_split_network_outputs[6]
+                forward_features_rest = split_network_outputs[12]
+                back_features_rest = split_network_outputs[13]
 
             forward_pos, forward_newDepth = self.get_pos_from_network_output(forward_depth, forward_offset, focals_pixels, const_offset=const_offset)
             back_pos, back_newDepth = self.get_pos_from_network_output(back_depth, back_offset, focals_pixels, const_offset=const_offset)
 
-
         else:
-            forward_split_network_outputs = self.forward_network_wo_offset(x, 
+            split_network_outputs = self.network_wo_offset(x, 
                                                            film_camera_emb=film_camera_emb,
                                                            N_views_xa=N_views_xa
                                                            ).split(self.split_dimensions_without_offset, dim=1)
-            back_split_network_outputs = self.back_network_wo_offset(x, 
-                                                        film_camera_emb=film_camera_emb,
-                                                        N_views_xa=N_views_xa
-                                                        ).split(self.split_dimensions_without_offset, dim=1)
 
-            forward_depth, forward_opacity, forward_scaling, forward_rotation, forward_features_dc = forward_split_network_outputs[:5]
-            back_depth, back_opacity, back_scaling, back_rotation, back_features_dc = back_split_network_outputs[:5]
+            forward_depth, forward_opacity, forward_scaling, forward_rotation, forward_features_dc, back_depth, back_opacity, back_scaling, back_rotation, back_features_dc = split_network_outputs[:10]
             if self.cfg.model.max_sh_degree > 0:
-                forward_features_rest = forward_split_network_outputs[5]
-                back_features_rest = back_split_network_outputs[5]
+                forward_features_rest = split_network_outputs[10]
+                back_features_rest = split_network_outputs[11]
 
             forward_pos, forward_newDepth = self.get_pos_from_network_output(forward_depth, 0.0, focals_pixels, const_offset=const_offset)
             back_pos, back_newDepth = self.get_pos_from_network_output(back_depth, 0.0, focals_pixels, const_offset=const_offset)
@@ -814,14 +791,14 @@ class GaussianSplatPredictor(nn.Module):
 
         forward_out_dict = {
             "xyz": forward_pos, 
-            "depth": forward_newDepth.squeeze(0),
+            "depth": forward_newDepth,
             "rotation": self.flatten_vector(self.rotation_activation(forward_rotation)),
             "features_dc": self.flatten_vector(forward_features_dc).unsqueeze(2)
             }
         
         back_out_dict = {
             "xyz": back_pos, 
-            "depth": back_newDepth.squeeze(0),
+            "depth": back_newDepth,
             "rotation": self.flatten_vector(self.rotation_activation(back_rotation)),
             "features_dc": self.flatten_vector(back_features_dc).unsqueeze(2)
             }

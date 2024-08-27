@@ -61,14 +61,10 @@ def main(cfg: DictConfig):
 
     l = []
     if cfg.model.network_with_offset:
-        l.append({'params': gaussian_predictor.forward_network_with_offset.parameters(), 
-         'lr': cfg.opt.base_lr})
-        l.append({'params': gaussian_predictor.back_network_with_offset.parameters(), 
+        l.append({'params': gaussian_predictor.network_with_offset.parameters(), 
          'lr': cfg.opt.base_lr})
     if cfg.model.network_without_offset:
-        l.append({'params': gaussian_predictor.forward_network_wo_offset.parameters(), 
-         'lr': cfg.opt.base_lr})
-        l.append({'params': gaussian_predictor.back_network_wo_offset.parameters(), 
+        l.append({'params': gaussian_predictor.network_wo_offset.parameters(), 
          'lr': cfg.opt.base_lr})
     optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15, 
                                  betas=cfg.opt.betas)
@@ -216,6 +212,10 @@ def main(cfg: DictConfig):
                 else:
                     small_gaussian_reg_loss = 0.0
             # Render
+            forward_gaussian_splat_batch = {k: v[b_idx].contiguous() for k, v in forward_gaussian_splats.items()}
+            back_gaussian_splats_batch = {k: v[b_idx].contiguous() for k, v in back_gaussian_splats.items()}
+            gaussian_splat_batch = {'back': back_gaussian_splats_batch, 'forward': forward_gaussian_splat_batch}
+
             l12_loss_sum = 0.0
             lpips_loss_sum = 0.0
             rendered_images = []
@@ -224,9 +224,6 @@ def main(cfg: DictConfig):
                 # image at index 0 is training, remaining images are targets
                 # Rendering is done sequentially because gaussian rasterization code
                 # does not support batching
-                forward_gaussian_splat_batch = {k: v[b_idx].contiguous() for k, v in forward_gaussian_splats.items()}
-                back_gaussian_splats_batch = {k: v[b_idx].contiguous() for k, v in back_gaussian_splats.items()}
-                gaussian_splat_batch = {'back': back_gaussian_splats_batch, 'forward': forward_gaussian_splat_batch}
                 for r_idx in range(cfg.data.input_images, data["gt_images"].shape[1]):
                     if "focals_pixels" in data.keys():
                         focals_pixels_render = data["focals_pixels"][b_idx, r_idx].cpu()

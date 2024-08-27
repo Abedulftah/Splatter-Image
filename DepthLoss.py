@@ -9,8 +9,6 @@ class DepthLossF(nn.Module):
     def forward(self, D1, D2):
 
         diff = D1 - D2
-
-        loss_below_C = torch.relu(self.C - diff)
-        loss = torch.mean(loss_below_C)
+        loss = torch.mean(torch.relu(self.C - diff) + torch.relu(diff - 2*self.C))
         
         return loss
