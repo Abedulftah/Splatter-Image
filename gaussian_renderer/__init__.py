@@ -23,13 +23,11 @@ def render_predicted(pc : dict,
     Background tensor (bg_color) must be on GPU!
     """
     pc1, pc2 = pc['forward'], pc['back']
+    means3D = torch.cat((pc1['xyz'], pc2['xyz']), dim=0)
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-    forward_screenspace_points = torch.zeros_like(pc1["xyz"], dtype=pc1["xyz"].dtype, requires_grad=True, device=pc1["xyz"].device) + 0
-    back_screenspace_points = torch.zeros_like(pc2["xyz"], dtype=pc2["xyz"].dtype, requires_grad=True, device=pc2["xyz"].device) + 0
-
+    screenspace_points = torch.zeros_like(means3D, dtype=means3D.dtype, requires_grad=True, device=means3D.device) + 0
     try:
-        forward_screenspace_points.retain_grad()
-        back_screenspace_points.retain_grad()
+        screenspace_points.retain_grad()
     except:
         pass
 
@@ -57,64 +55,46 @@ def render_predicted(pc : dict,
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
 
-    forward_means3D, back_means3D = pc1["xyz"], pc2['xyz']
-    forward_means2D, back_means2D = forward_screenspace_points, back_screenspace_points
-    forward_opacity, back_opacity = pc1["opacity"], pc2["opacity"]
+    means2D = screenspace_points
+    opacity = torch.cat((pc1['opacity'], pc2['opacity']), dim=0)
 
     # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
     # scaling / rotation by the rasterizer.
-    forward_scales, back_scales = None, None
-    forward_rotations, back_rotations = None, None
-    forward_cov3D_precomp, back_cov3D_precomp = None, None
+    scales = None
+    rotations = None
+    cov3D_precomp = None
 
-    forward_scales, back_scales = pc1["scaling"], pc2["scaling"]
-    forward_rotations, back_rotations = pc1["rotation"], pc2["rotation"]
+    scales = torch.cat((pc1['scaling'], pc2['scaling']), dim=0)
+    rotations = torch.cat((pc1['rotation'], pc2['rotation']), dim=0)
 
     # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
     # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
-    forward_shs, back_shs = None, None
-    forward_colors_precomp, back_colors_precomp = None, None
+    shs = None
+    colors_precomp = None
     if override_color is None:
         if "features_rest" in pc1.keys():
-            forward_shs = torch.cat([pc1["features_dc"], pc1["features_rest"]], dim=1).contiguous()
-            back_shs = torch.cat([pc2["features_dc"], pc2["features_rest"]], dim=1).contiguous()
+            shs = torch.cat((torch.cat([pc1["features_dc"], pc1["features_rest"]], dim=1).contiguous(), torch.cat([pc2["features_dc"], pc2["features_rest"]], dim=1).contiguous()), dim=0)
         else:
-            forward_shs = pc1["features_dc"]
-            back_shs = pc2["features_dc"]
+            shs = torch.cat((pc1['features_dc'], pc2['features_dc']), dim=0)
     else:
-        forward_colors_precomp = override_color
-        back_colors_precomp = override_color
+        # mean we need to cat
+        colors_precomp = override_color
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
-    forward_rendered_image, forward_radii, depth1 = rasterizer(
-        means3D = forward_means3D,
-        means2D = forward_means2D,
-        shs = forward_shs,
-        colors_precomp = forward_colors_precomp,
-        opacities = forward_opacity,
-        scales = forward_scales,
-        rotations = forward_rotations,
-        cov3D_precomp = forward_cov3D_precomp)
+    rendered_image, radii = rasterizer(
+        means3D = means3D,
+        means2D = means2D,
+        shs = shs,
+        colors_precomp = colors_precomp,
+        opacities = opacity,
+        scales = scales,
+        rotations = rotations,
+        cov3D_precomp = cov3D_precomp)
     
-    back_rendered_image, back_radii, depth2 = rasterizer(
-        means3D = back_means3D,
-        means2D = back_means2D,
-        shs = back_shs,
-        colors_precomp = back_colors_precomp,
-        opacities = back_opacity,
-        scales = back_scales,
-        rotations = back_rotations,
-        cov3D_precomp = back_cov3D_precomp)
-    
-
-    d = depth1[0, :, :] > depth2[0, :, :]
-
 
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
-    rendered_image = (forward_rendered_image * ~d) + (back_rendered_image * d)
-
     return {"render": rendered_image,
-            "viewspace_points": forward_screenspace_points,
-            "visibility_filter" : forward_radii > 0,
-            "radii": forward_radii}
+            "viewspace_points": screenspace_points,
+            "visibility_filter" : radii > 0,
+            "radii": radii}
