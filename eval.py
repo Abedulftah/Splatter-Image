@@ -20,6 +20,7 @@ from gaussian_renderer import render_predicted
 from scene.gaussian_predictor import GaussianSplatPredictor
 from datasets.dataset_factory import get_dataset
 from utils.loss_utils import ssim as ssim_fn
+from utils.plotting_utils import *
 
 class Metricator():
     def __init__(self, device):
@@ -60,10 +61,8 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
     psnr_all_examples_cond = []
     ssim_all_examples_cond = []
     lpips_all_examples_cond = []
-    meow = 0
     for d_idx, data in enumerate(tqdm.tqdm(dataloader)):
-        if meow == 2:
-            break
+
         psnr_all_renders_novel = []
         ssim_all_renders_novel = []
         lpips_all_renders_novel = []
@@ -107,12 +106,15 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
         depth1 = forward_reconstruction['depth'].squeeze(0).reshape(1, 64, 64)
         depth2 = back_reconstruction['depth'].squeeze(0).reshape(1, 64, 64)
 
+        show_point_cloud(forward_reconstruction['xyz'], forward_reconstruction['features_dc'])
+        show_point_cloud(back_reconstruction['xyz'], back_reconstruction['features_dc'])
+
+
         torchvision.utils.save_image(gau, os.path.join(out_example, "forward_gaussians.png"))
         torchvision.utils.save_image(gau1, os.path.join(out_example, "back_gaussians.png"))
         torchvision.utils.save_image(depth1, os.path.join(out_example, "forward_depth.png"))
         torchvision.utils.save_image(depth2, os.path.join(out_example, "back_depth.png"))
-        # for i in range(64):
-        #     print(depth2[0, i])
+
 
         forward_gaussian_splat_batch = {k: v[0].contiguous() for k, v in forward_reconstruction.items()}
         back_gaussian_splats_batch = {k: v[0].contiguous() for k, v in back_reconstruction.items()}
@@ -163,7 +165,7 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
                     " " + str(ssim_all_examples_novel[-1]) + \
                     " " + str(lpips_all_examples_novel[-1]) + "\n")
         
-        meow += 1
+        break
 
     scores = {"PSNR_cond": sum(psnr_all_examples_cond) / len(psnr_all_examples_cond),
               "SSIM_cond": sum(ssim_all_examples_cond) / len(ssim_all_examples_cond),
