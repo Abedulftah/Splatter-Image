@@ -6,6 +6,12 @@ class DepthLossF(nn.Module):
         super(DepthLossF, self).__init__()
     
     def forward(self, D1, D2):
-        loss = torch.mean(((D1 - D2) >= 0).float())
-    
+        diff = D1 - D2
+        
+        mask1 = (diff > 0).float()
+        mask2 = (diff == 0).float() 
+        loss = torch.mean(diff * mask1 + 1e-3 * mask2)
+        
         return loss
+
+
