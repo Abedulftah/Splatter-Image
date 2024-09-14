@@ -62,7 +62,6 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
     ssim_all_examples_cond = []
     lpips_all_examples_cond = []
     for d_idx, data in enumerate(tqdm.tqdm(dataloader)):
-
         psnr_all_renders_novel = []
         ssim_all_renders_novel = []
         lpips_all_renders_novel = []
@@ -71,7 +70,6 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
         lpips_all_renders_cond = []
 
         data = {k: v.to(device) for k, v in data.items()}
-
         rot_transform_quats = data["source_cv2wT_quat"][:, :model_cfg.data.input_images]
 
         if model_cfg.data.category == "hydrants" or model_cfg.data.category == "teddybears":
@@ -96,31 +94,18 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
             os.makedirs(out_example, exist_ok=True)
 
         # batch has length 1, the first image is conditioning
+
         forward_reconstruction, back_reconstruction = model(input_images,
                                data["view_to_world_transforms"][:, :model_cfg.data.input_images, ...],
                                rot_transform_quats,
                                focals_pixels_pred)
-            
-        gau = forward_reconstruction['xyz'].squeeze(0).permute(1, 0).reshape(3, 64, 64)
-        gau1 = back_reconstruction['xyz'].squeeze(0).permute(1, 0).reshape(3, 64, 64)
-        depth1 = forward_reconstruction['depth'].squeeze(0).reshape(1, 64, 64)
-        depth2 = back_reconstruction['depth'].squeeze(0).reshape(1, 64, 64)
-
-        show_point_cloud(forward_reconstruction['xyz'], forward_reconstruction['features_dc'])
-        show_point_cloud(back_reconstruction['xyz'], back_reconstruction['features_dc'])
-
-
-        torchvision.utils.save_image(gau, os.path.join(out_example, "forward_gaussians.png"))
-        torchvision.utils.save_image(gau1, os.path.join(out_example, "back_gaussians.png"))
-        torchvision.utils.save_image(depth1, os.path.join(out_example, "forward_depth.png"))
-        torchvision.utils.save_image(depth2, os.path.join(out_example, "back_depth.png"))
 
 
         forward_gaussian_splat_batch = {k: v[0].contiguous() for k, v in forward_reconstruction.items()}
         back_gaussian_splats_batch = {k: v[0].contiguous() for k, v in back_reconstruction.items()}
         gaussian_splat_batch = {'back': back_gaussian_splats_batch, 'forward': forward_gaussian_splat_batch}
 
-        for r_idx in range( data["gt_images"].shape[1]):
+        for r_idx in range(data["gt_images"].shape[1]):
 
             if "focals_pixels" in data.keys():
                 focals_pixels_render = data["focals_pixels"][0, r_idx]
