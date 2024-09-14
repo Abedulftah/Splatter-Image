@@ -555,29 +555,47 @@ class GaussianSplatPredictor(nn.Module):
         bias_inits = []
 
         if with_offset:
-            split_dimensions = split_dimensions + [1, 3, 1, 3, 4, 3] + [1, 3, 1, 3, 4, 3, 1]
-            scale_inits = scale_inits + [cfg.model.depth_scale, 
-                           cfg.model.xyz_scale, 
+            # no need for offset for front only for back.
+            split_dimensions = split_dimensions + [1, 1, 3, 4, 3] + [3, 1, 3, 4, 3, 1]
+            scale_inits = scale_inits + [cfg.model.depth_scale,
                            cfg.model.opacity_scale, 
                            cfg.model.scale_scale,
                            1.0,
-                           5.0]
+                           5.0] + [cfg.model.xyz_scale,
+                           cfg.model.opacity_scale, 
+                           cfg.model.scale_scale,
+                           1.0,
+                           5.0,
+                           1.0]
             bias_inits = [cfg.model.depth_bias,
-                          cfg.model.xyz_bias, 
                           cfg.model.opacity_bias,
                           np.log(cfg.model.scale_bias),
                           0.0,
-                          0.0]
+                          0.0] + [cfg.model.xyz_bias, 
+                          cfg.model.opacity_bias,
+                          np.log(cfg.model.scale_bias),
+                          0.0,
+                          0.0,
+                          1.0]
         else:
-            split_dimensions = split_dimensions + [1, 1, 3, 4, 3] + [1, 1, 3, 4, 3, 1]
+            # we have problem with dimensions here.
+            split_dimensions = split_dimensions + [1, 1, 3, 4, 3] + [1, 3, 4, 3, 1]
             scale_inits = scale_inits + [cfg.model.depth_scale, 
                            cfg.model.opacity_scale, 
                            cfg.model.scale_scale,
                            1.0,
-                           5.0]
+                           5.0] + [cfg.model.opacity_scale, 
+                           cfg.model.scale_scale,
+                           1.0,
+                           5.0,
+                           0.0]
             bias_inits = bias_inits + [cfg.model.depth_bias,
                           cfg.model.opacity_bias,
                           np.log(cfg.model.scale_bias),
+                          0.0,
+                          0.0] + [cfg.model.opacity_bias,
+                          np.log(cfg.model.scale_bias),
+                          0.0,
                           0.0,
                           0.0]
 
@@ -692,10 +710,9 @@ class GaussianSplatPredictor(nn.Module):
             
             return normalized_tensor
         
-        normalized_depth = normalize_tensor_to_255(depth)
-        pos = ray_dirs_xy[0, 0] * depth[0] + offset[0, 0]
-        new = ray_dirs_xy[0, 1] * depth[0] + offset[0, 1]
-        return pos, new
+        # normalized_depth = normalize_tensor_to_255(depth)
+        pos = ray_dirs_xy * depth + offset
+        return pos, depth
 
     def forward(self, x, 
                 source_cameras_view_to_world, 
@@ -734,35 +751,37 @@ class GaussianSplatPredictor(nn.Module):
         x = x.contiguous(memory_format=torch.channels_last)
 
         if self.cfg.model.network_with_offset:
-
             split_network_outputs = self.network_with_offset(x,
                                                              film_camera_emb=film_camera_emb,
                                                              N_views_xa=N_views_xa
                                                              )
 
             split_network_outputs = split_network_outputs.split(self.split_dimensions_with_offset, dim=1)
-            forward_depth, forward_offset, forward_opacity, forward_scaling, forward_rotation, forward_features_dc, back_depth, back_offset, back_opacity, back_scaling, back_rotation, back_features_dc, offset_depth = split_network_outputs[:13]
-            if self.cfg.model.max_sh_degree > 0:
-                forward_features_rest = split_network_outputs[13]
-                back_features_rest = split_network_outputs[14]
+            forward_depth, forward_opacity, forward_scaling, forward_rotation, forward_features_dc, back_offset, back_opacity, back_scaling, back_rotation, back_features_dc, depth_offset = split_network_outputs[:11]
 
-            forward_pos, forward_newDepth = self.get_pos_from_network_output(forward_depth, forward_offset, focals_pixels, const_offset=const_offset)
-            back_pos, back_newDepth = self.get_pos_from_network_output(back_depth, back_offset, focals_pixels, const_offset=const_offset)
-            back_pos += torch.relu(offset_depth)
-        else:
-            split_network_outputs = self.network_wo_offset(x, 
-                                                           film_camera_emb=film_camera_emb,
-                                                           N_views_xa=N_views_xa
-                                                           ).split(self.split_dimensions_without_offset, dim=1)
-
-            forward_depth, forward_opacity, forward_scaling, forward_rotation, forward_features_dc, back_depth, back_opacity, back_scaling, back_rotation, back_features_dc, offset_depth = split_network_outputs[:11]
+            back_depth = forward_depth.clone() + torch.relu(depth_offset)
             if self.cfg.model.max_sh_degree > 0:
                 forward_features_rest = split_network_outputs[11]
                 back_features_rest = split_network_outputs[12]
 
             forward_pos, forward_newDepth = self.get_pos_from_network_output(forward_depth, 0.0, focals_pixels, const_offset=const_offset)
+            back_pos, back_newDepth = self.get_pos_from_network_output(back_depth, back_offset, focals_pixels, const_offset=const_offset)
+
+        else:
+            # we have problem here with dimensions.
+            split_network_outputs = self.network_wo_offset(x, 
+                                                           film_camera_emb=film_camera_emb,
+                                                           N_views_xa=N_views_xa
+                                                           ).split(self.split_dimensions_without_offset, dim=1)
+
+            forward_depth, forward_opacity, forward_scaling, forward_rotation, forward_features_dc, back_opacity, back_scaling, back_rotation, back_features_dc, offset_depth = split_network_outputs[:10]
+            back_depth = forward_depth.clone() + torch.relu(back_offset[:, 2])
+            if self.cfg.model.max_sh_degree > 0:
+                forward_features_rest = split_network_outputs[10]
+                back_features_rest = split_network_outputs[11]
+
+            forward_pos, forward_newDepth = self.get_pos_from_network_output(forward_depth, 0.0, focals_pixels, const_offset=const_offset)
             back_pos, back_newDepth = self.get_pos_from_network_output(back_depth, 0.0, focals_pixels, const_offset=const_offset)
-            back_pos += torch.relu(offset_depth)
             
         if self.cfg.model.isotropic:
             foward_scaling_out = torch.cat([forward_scaling[:, :1, ...], forward_scaling[:, :1, ...], forward_scaling[:, :1, ...]], dim=1)
@@ -788,14 +807,14 @@ class GaussianSplatPredictor(nn.Module):
 
         forward_out_dict = {
             "xyz": forward_pos, 
-            "depth": forward_newDepth,
+            "depth": forward_depth,
             "rotation": self.flatten_vector(self.rotation_activation(forward_rotation)),
             "features_dc": self.flatten_vector(forward_features_dc).unsqueeze(2)
             }
         
         back_out_dict = {
             "xyz": back_pos, 
-            "depth": back_newDepth,
+            "depth": back_depth,
             "rotation": self.flatten_vector(self.rotation_activation(back_rotation)),
             "features_dc": self.flatten_vector(back_features_dc).unsqueeze(2)
             }
