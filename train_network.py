@@ -184,10 +184,8 @@ def main(cfg: DictConfig):
                                                 data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
                                                 rot_transform_quats,
                                                 focals_pixels_pred)
-            
-            forward_depth, back_depth = forward_gaussian_splats['depth'], back_gaussian_splats['depth']
-            
-            l_d = loss_dfn(forward_depth, back_depth)
+                        
+            l_d = loss_dfn(back_gaussian_splats['depth'])
 
 
             if cfg.data.category == "hydrants" or cfg.data.category == "teddybears":
