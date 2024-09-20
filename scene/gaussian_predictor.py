@@ -712,7 +712,7 @@ class GaussianSplatPredictor(nn.Module):
         
         # normalized_depth = normalize_tensor_to_255(depth)
         pos = ray_dirs_xy * depth + offset
-        return pos, depth
+        return pos, normalize_tensor_to_255(depth)
 
     def forward(self, x, 
                 source_cameras_view_to_world, 
@@ -807,14 +807,14 @@ class GaussianSplatPredictor(nn.Module):
 
         forward_out_dict = {
             "xyz": forward_pos, 
-            "depth": forward_depth,
+            "depth": forward_newDepth,
             "rotation": self.flatten_vector(self.rotation_activation(forward_rotation)),
             "features_dc": self.flatten_vector(forward_features_dc).unsqueeze(2)
             }
         
         back_out_dict = {
             "xyz": back_pos, 
-            "depth": back_depth,
+            "depth": depth_offset,
             "rotation": self.flatten_vector(self.rotation_activation(back_rotation)),
             "features_dc": self.flatten_vector(back_features_dc).unsqueeze(2)
             }
