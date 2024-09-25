@@ -165,11 +165,11 @@ Gaussian rasterizer assumes row-major order of rigid body transform matrices, i.
 
 # Results
 
-## metrics, Loss
+## Metrics, Loss
 
 ![alt text](Results/loss_graphs.png)
 
-There results at 10k iter:
+Their results at 10k iter:
 
 - PSNR – 20.4448
 - LPILPS - 0.2120
