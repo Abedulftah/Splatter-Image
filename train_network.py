@@ -12,6 +12,7 @@ from lightning.fabric import Fabric
 from ema_pytorch import EMA
 from omegaconf import DictConfig, OmegaConf
 
+from DepthLoss import DepthLossF
 from utils.general_utils import safe_state
 from utils.loss_utils import l1_loss, l2_loss
 import lpips as lpips_lib
@@ -27,10 +28,10 @@ def main(cfg: DictConfig):
 
     torch.set_float32_matmul_precision('high')
     if cfg.general.mixed_precision:
-        fabric = Fabric(accelerator="cuda", devices=cfg.general.num_devices, strategy="ddp",
+        fabric = Fabric(accelerator="cuda", devices=cfg.general.num_devices,
                         precision="16-mixed")
     else:
-        fabric = Fabric(accelerator="cuda", devices=cfg.general.num_devices, strategy="ddp")
+        fabric = Fabric(accelerator="cuda", devices=cfg.general.num_devices)
     fabric.launch()
 
     if fabric.is_global_zero:
@@ -109,6 +110,8 @@ def main(cfg: DictConfig):
         loss_fn = l2_loss
     elif cfg.opt.loss == "l1":
         loss_fn = l1_loss
+    
+    loss_dfn = DepthLossF()
 
     if cfg.opt.lambda_lpips != 0:
         lpips_fn = fabric.to_device(lpips_lib.LPIPS(net='vgg'))
@@ -159,7 +162,6 @@ def main(cfg: DictConfig):
     iteration = first_iter
 
     for num_epoch in range((cfg.opt.iterations + 1 - first_iter)// len(dataloader) + 1):
-        dataloader.sampler.set_epoch(num_epoch)        
 
         for data in dataloader:
             iteration += 1
@@ -178,39 +180,44 @@ def main(cfg: DictConfig):
                 focals_pixels_pred = None
                 input_images = data["gt_images"][:, :cfg.data.input_images, ...]
 
-            gaussian_splats = gaussian_predictor(input_images,
+            forward_gaussian_splats, back_gaussian_splats = gaussian_predictor(input_images,
                                                 data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
                                                 rot_transform_quats,
                                                 focals_pixels_pred)
+                        
+            l_d = loss_dfn(back_gaussian_splats['depth'])
 
 
             if cfg.data.category == "hydrants" or cfg.data.category == "teddybears":
                 # regularize very big gaussians
-                if len(torch.where(gaussian_splats["scaling"] > 20)[0]) > 0:
+                if len(torch.where(forward_gaussian_splats["scaling"] > 20)[0]) > 0:
                     big_gaussian_reg_loss = torch.mean(
-                        gaussian_splats["scaling"][torch.where(gaussian_splats["scaling"] > 20)] * 0.1)
+                        forward_gaussian_splats["scaling"][torch.where(forward_gaussian_splats["scaling"] > 20)] * 0.1)
                     print('Regularising {} big Gaussians on iteration {}'.format(
-                        len(torch.where(gaussian_splats["scaling"] > 20)[0]), iteration))
+                        len(torch.where(forward_gaussian_splats["scaling"] > 20)[0]), iteration))
                 else:
                     big_gaussian_reg_loss = 0.0
                 # regularize very small Gaussians
-                if len(torch.where(gaussian_splats["scaling"] < 1e-5)[0]) > 0:
+                if len(torch.where(forward_gaussian_splats["scaling"] < 1e-5)[0]) > 0:
                     small_gaussian_reg_loss = torch.mean(
-                        -torch.log(gaussian_splats["scaling"][torch.where(gaussian_splats["scaling"] < 1e-5)]) * 0.1)
+                        -torch.log(forward_gaussian_splats["scaling"][torch.where(forward_gaussian_splats["scaling"] < 1e-5)]) * 0.1)
                     print('Regularising {} small Gaussians on iteration {}'.format(
-                        len(torch.where(gaussian_splats["scaling"] < 1e-5)[0]), iteration))
+                        len(torch.where(forward_gaussian_splats["scaling"] < 1e-5)[0]), iteration))
                 else:
                     small_gaussian_reg_loss = 0.0
-            # Render
+
             l12_loss_sum = 0.0
             lpips_loss_sum = 0.0
             rendered_images = []
             gt_images = []
             for b_idx in range(data["gt_images"].shape[0]):
+                # Render
+                forward_gaussian_splat_batch = {k: v[b_idx].contiguous() for k, v in forward_gaussian_splats.items()}
+                back_gaussian_splats_batch = {k: v[b_idx].contiguous() for k, v in back_gaussian_splats.items()}
+                gaussian_splat_batch = {'back': back_gaussian_splats_batch, 'forward': forward_gaussian_splat_batch}
                 # image at index 0 is training, remaining images are targets
                 # Rendering is done sequentially because gaussian rasterization code
                 # does not support batching
-                gaussian_splat_batch = {k: v[b_idx].contiguous() for k, v in gaussian_splats.items()}
                 for r_idx in range(cfg.data.input_images, data["gt_images"].shape[1]):
                     if "focals_pixels" in data.keys():
                         focals_pixels_render = data["focals_pixels"][b_idx, r_idx].cpu()
@@ -236,7 +243,7 @@ def main(cfg: DictConfig):
                     lpips_fn(rendered_images * 2 - 1, gt_images * 2 - 1),
                     )
 
-            total_loss = l12_loss_sum * lambda_l12 + lpips_loss_sum * lambda_lpips
+            total_loss = l12_loss_sum * lambda_l12 + lpips_loss_sum * lambda_lpips + l_d 
             if cfg.data.category == "hydrants" or cfg.data.category == "teddybears":
                 total_loss = total_loss + big_gaussian_reg_loss + small_gaussian_reg_loss
 
@@ -260,6 +267,8 @@ def main(cfg: DictConfig):
             with torch.no_grad():
                 if iteration % cfg.logging.loss_log == 0 and fabric.is_global_zero:
                     wandb.log({"training_loss": np.log10(total_loss.item() + 1e-8)}, step=iteration)
+                    wandb.log({"depth_loss": np.log10(l_d.item() + 1e-8)}, step=iteration)
+                    wandb.log({"training_l12_loss": np.log10(l12_loss_sum.item() + 1e-8)}, step=iteration)
                     if cfg.opt.lambda_lpips != 0:
                         wandb.log({"training_l12_loss": np.log10(l12_loss_sum.item() + 1e-8)}, step=iteration)
                         wandb.log({"training_lpips_loss": np.log10(lpips_loss_sum.item() + 1e-8)}, step=iteration)
@@ -302,10 +311,14 @@ def main(cfg: DictConfig):
                         focals_pixels_pred = None
                         input_images = vis_data["gt_images"][:, :cfg.data.input_images, ...]
 
-                    gaussian_splats_vis = gaussian_predictor(input_images,
-                                                        vis_data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
+                    forward_gaussian_splats, back_gaussian_splats = gaussian_predictor(input_images,
+                                                        data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
                                                         rot_transform_quats,
                                                         focals_pixels_pred)
+                    
+                    forward_gaussian_splat_batch = {k: v[b_idx].contiguous() for k, v in forward_gaussian_splats.items()}
+                    back_gaussian_splats_batch = {k: v[b_idx].contiguous() for k, v in back_gaussian_splats.items()}
+                    gaussian_splat_batch = {'back': back_gaussian_splats_batch, 'forward': forward_gaussian_splat_batch}
 
                     test_loop = []
                     test_loop_gt = []
@@ -315,7 +328,7 @@ def main(cfg: DictConfig):
                             focals_pixels_render = vis_data["focals_pixels"][0, r_idx]
                         else:
                             focals_pixels_render = None
-                        test_image = render_predicted({k: v[0].contiguous() for k, v in gaussian_splats_vis.items()}, 
+                        test_image = render_predicted(gaussian_splat_batch, 
                                             vis_data["world_view_transforms"][0, r_idx], 
                                             vis_data["full_proj_transforms"][0, r_idx], 
                                             vis_data["camera_centers"][0, r_idx],

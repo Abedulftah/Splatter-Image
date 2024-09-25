@@ -2,10 +2,12 @@ import argparse
 import json
 import os
 import sys
+import numpy as np
 import tqdm
 from omegaconf import OmegaConf
 
 from huggingface_hub import hf_hub_download
+import matplotlib.pyplot as plt
 
 import lpips as lpips_lib
 
@@ -18,6 +20,7 @@ from gaussian_renderer import render_predicted
 from scene.gaussian_predictor import GaussianSplatPredictor
 from datasets.dataset_factory import get_dataset
 from utils.loss_utils import ssim as ssim_fn
+from utils.plotting_utils import *
 
 class Metricator():
     def __init__(self, device):
@@ -58,7 +61,6 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
     psnr_all_examples_cond = []
     ssim_all_examples_cond = []
     lpips_all_examples_cond = []
-
     for d_idx, data in enumerate(tqdm.tqdm(dataloader)):
         psnr_all_renders_novel = []
         ssim_all_renders_novel = []
@@ -68,7 +70,6 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
         lpips_all_renders_cond = []
 
         data = {k: v.to(device) for k, v in data.items()}
-
         rot_transform_quats = data["source_cv2wT_quat"][:, :model_cfg.data.input_images]
 
         if model_cfg.data.category == "hydrants" or model_cfg.data.category == "teddybears":
@@ -93,24 +94,31 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
             os.makedirs(out_example, exist_ok=True)
 
         # batch has length 1, the first image is conditioning
-        reconstruction = model(input_images,
+
+        forward_reconstruction, back_reconstruction = model(input_images,
                                data["view_to_world_transforms"][:, :model_cfg.data.input_images, ...],
                                rot_transform_quats,
                                focals_pixels_pred)
 
-        for r_idx in range( data["gt_images"].shape[1]):
+
+        forward_gaussian_splat_batch = {k: v[0].contiguous() for k, v in forward_reconstruction.items()}
+        back_gaussian_splats_batch = {k: v[0].contiguous() for k, v in back_reconstruction.items()}
+        gaussian_splat_batch = {'back': back_gaussian_splats_batch, 'forward': forward_gaussian_splat_batch}
+
+        for r_idx in range(data["gt_images"].shape[1]):
+
             if "focals_pixels" in data.keys():
                 focals_pixels_render = data["focals_pixels"][0, r_idx]
             else:
                 focals_pixels_render = None
-            image = render_predicted({k: v[0].contiguous() for k, v in reconstruction.items()},
+            res = render_predicted(gaussian_splat_batch,
                                      data["world_view_transforms"][0, r_idx],
                                      data["full_proj_transforms"][0, r_idx], 
                                      data["camera_centers"][0, r_idx],
                                      background,
                                      model_cfg,
-                                     focals_pixels=focals_pixels_render)["render"]
-
+                                     focals_pixels=focals_pixels_render)
+            image = res['render']
             if d_idx < save_vis:
                 # vis_image_preds(reconstruction, out_example)
                 torchvision.utils.save_image(image, os.path.join(out_example, '{0:05d}'.format(r_idx) + ".png"))
@@ -141,6 +149,8 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
                     " " + str(psnr_all_examples_novel[-1]) + \
                     " " + str(ssim_all_examples_novel[-1]) + \
                     " " + str(lpips_all_examples_novel[-1]) + "\n")
+        
+        break
 
     scores = {"PSNR_cond": sum(psnr_all_examples_cond) / len(psnr_all_examples_cond),
               "SSIM_cond": sum(ssim_all_examples_cond) / len(ssim_all_examples_cond),

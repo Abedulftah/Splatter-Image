@@ -22,9 +22,10 @@ def render_predicted(pc : dict,
     
     Background tensor (bg_color) must be on GPU!
     """
- 
+    pc1, pc2 = pc['forward'], pc['back']
+    means3D = torch.cat((pc1['xyz'], pc2['xyz']), dim=0)
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-    screenspace_points = torch.zeros_like(pc["xyz"], dtype=pc["xyz"].dtype, requires_grad=True, device=pc["xyz"].device) + 0
+    screenspace_points = torch.zeros_like(means3D, dtype=means3D.dtype, requires_grad=True, device=means3D.device) + 0
     try:
         screenspace_points.retain_grad()
     except:
@@ -36,7 +37,6 @@ def render_predicted(pc : dict,
     else:
         tanfovx = math.tan(0.5 * focal2fov(focals_pixels[0].item(), cfg.data.training_resolution))
         tanfovy = math.tan(0.5 * focal2fov(focals_pixels[1].item(), cfg.data.training_resolution))
-
     # Set up rasterization configuration
     raster_settings = GaussianRasterizationSettings(
         image_height=int(cfg.data.training_resolution),
@@ -55,9 +55,8 @@ def render_predicted(pc : dict,
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
 
-    means3D = pc["xyz"]
     means2D = screenspace_points
-    opacity = pc["opacity"]
+    opacity = torch.cat((pc1['opacity'], pc2['opacity']), dim=0)
 
     # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
     # scaling / rotation by the rasterizer.
@@ -65,19 +64,20 @@ def render_predicted(pc : dict,
     rotations = None
     cov3D_precomp = None
 
-    scales = pc["scaling"]
-    rotations = pc["rotation"]
+    scales = torch.cat((pc1['scaling'], pc2['scaling']), dim=0)
+    rotations = torch.cat((pc1['rotation'], pc2['rotation']), dim=0)
 
     # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
     # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
     shs = None
     colors_precomp = None
     if override_color is None:
-        if "features_rest" in pc.keys():
-            shs = torch.cat([pc["features_dc"], pc["features_rest"]], dim=1).contiguous()
+        if "features_rest" in pc1.keys():
+            shs = torch.cat((torch.cat([pc1["features_dc"], pc1["features_rest"]], dim=1).contiguous(), torch.cat([pc2["features_dc"], pc2["features_rest"]], dim=1).contiguous()), dim=0)
         else:
-            shs = pc["features_dc"]
+            shs = torch.cat((pc1['features_dc'], pc2['features_dc']), dim=0)
     else:
+        # mean we need to cat
         colors_precomp = override_color
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
@@ -90,6 +90,7 @@ def render_predicted(pc : dict,
         scales = scales,
         rotations = rotations,
         cov3D_precomp = cov3D_precomp)
+    
 
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.

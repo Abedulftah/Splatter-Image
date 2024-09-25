@@ -7,6 +7,7 @@ import os
 from PIL import Image
 import numpy as np
 import torch
+import torchvision
 
 from matplotlib import pyplot as plt
 from utils.sh_utils import eval_sh
@@ -115,37 +116,50 @@ def vis_image_preds(image_preds: dict, folder_out: str):
         image_preds: a dictionary of xyz, opacity, scaling, rotation, features_dc and features_rest
     """
     image_preds_reshaped = {}
-    ray_dirs = (image_preds["xyz"].detach().cpu() / torch.norm(image_preds["xyz"].detach().cpu(), dim=-1, keepdim=True)).reshape(128, 128, 3)
+    ray_dirs = (image_preds["xyz"].detach().cpu() / torch.norm(image_preds["xyz"].detach().cpu(), dim=-1, keepdim=True)).reshape(64, 64, 3)
 
     for k, v in image_preds.items():
         image_preds_reshaped[k] = v
         if k == "xyz":
-            image_preds_reshaped[k] = (image_preds_reshaped[k] - torch.min(image_preds_reshaped[k], dim=0, keepdim=True)[0]) / (
-                torch.max(image_preds_reshaped[k], dim=0, keepdim=True)[0] - torch.min(image_preds_reshaped[k], dim=0, keepdim=True)[0]
-            )
+            # image_preds_reshaped[k] = (image_preds_reshaped[k] - torch.min(image_preds_reshaped[k], dim=0, keepdim=True)[0]) / (
+            #     torch.max(image_preds_reshaped[k], dim=0, keepdim=True)[0] - torch.min(image_preds_reshaped[k], dim=0, keepdim=True)[0]
+            # )
+            image_preds_reshaped[k] = normalize_tensor(image_preds_reshaped[k])
         if k == "scaling":
-            image_preds_reshaped["scaling"] = (image_preds_reshaped["scaling"] - torch.min(image_preds_reshaped["scaling"], dim=0, keepdim=True)[0]) / (
-                torch.max(image_preds_reshaped["scaling"], dim=0, keepdim=True)[0] - torch.min(image_preds_reshaped["scaling"], dim=0, keepdim=True)[0]
-            )
+            # image_preds_reshaped["scaling"] = (image_preds_reshaped["scaling"] - torch.min(image_preds_reshaped["scaling"], dim=0, keepdim=True)[0]) / (
+            #     torch.max(image_preds_reshaped["scaling"], dim=0, keepdim=True)[0] - torch.min(image_preds_reshaped["scaling"], dim=0, keepdim=True)[0]
+            # )
+            image_preds_reshaped[k] = normalize_tensor(image_preds_reshaped[k])
         if k != "features_rest":
-            image_preds_reshaped[k] = image_preds_reshaped[k].reshape(128, 128, -1).detach().cpu()
+            image_preds_reshaped[k] = image_preds_reshaped[k].reshape(64, 64, -1).detach().cpu()
         else:
-            image_preds_reshaped[k] = image_preds_reshaped[k].reshape(128, 128, 3, 3).detach().cpu().permute(0, 1, 3, 2)
+            image_preds_reshaped[k] = image_preds_reshaped[k].reshape(64, 64, 3, 3).detach().cpu().permute(0, 1, 3, 2)
         if k == "opacity":
-            image_preds_reshaped[k] = image_preds_reshaped[k].expand(128, 128, 3) 
+            image_preds_reshaped[k] = image_preds_reshaped[k].expand(64, 64, 3) 
 
 
     colours = torch.cat([image_preds_reshaped["features_dc"].unsqueeze(-1), image_preds_reshaped["features_rest"]], dim=-1)
     colours = eval_sh(1, colours, ray_dirs)
 
+    colours = normalize_tensor(colours)
+    opacity = normalize_tensor(image_preds_reshaped["opacity"])
+    xyz = image_preds_reshaped["xyz"] * opacity + 1- opacity
+    scaling = image_preds_reshaped["scaling"] * opacity + 1 - opacity
+
+
     plt.imsave(os.path.join(folder_out, "colours.png"),
                colours.numpy())
     plt.imsave(os.path.join(folder_out, "opacity.png"),
-               image_preds_reshaped["opacity"].numpy())
+               opacity.numpy())
     plt.imsave(os.path.join(folder_out, "xyz.png"), 
-               (image_preds_reshaped["xyz"] * image_preds_reshaped["opacity"]+ 1 - image_preds_reshaped["opacity"]).numpy())
+               xyz.numpy())
     plt.imsave(os.path.join(folder_out, "scaling.png"), 
-               (image_preds_reshaped["scaling"] * image_preds_reshaped["opacity"] + 1 - image_preds_reshaped["opacity"]).numpy())
+               scaling.numpy())
 
+def normalize_tensor(tensor):
+    min_val = tensor.min()
+    max_val = tensor.max()
+    return (tensor - min_val) / (max_val - min_val)
+                                 
 if __name__ == "__main__":
     gridify()

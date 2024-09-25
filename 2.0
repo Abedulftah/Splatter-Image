@@ -1,0 +1,2 @@
+Requirement already satisfied: pydantic in c:\programdata\anaconda3\envs\splatter-image\lib\site-packages (1.10.17)
+Requirement already satisfied: typing-extensions>=4.2.0 in c:\programdata\anaconda3\envs\splatter-image\lib\site-packages (from pydantic) (4.9.0)
