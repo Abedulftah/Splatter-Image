@@ -160,7 +160,7 @@ def main(cfg: DictConfig):
     print("Beginning training")
     first_iter += 1
     iteration = first_iter
-
+    l_d = 0.0
     for num_epoch in range((cfg.opt.iterations + 1 - first_iter)// len(dataloader) + 1):
 
         for data in dataloader:
@@ -184,8 +184,8 @@ def main(cfg: DictConfig):
                                                 data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
                                                 rot_transform_quats,
                                                 focals_pixels_pred)
-                        
-            l_d = loss_dfn(back_gaussian_splats['depth'])
+            if cfg.model.network_with_offset:
+                l_d = loss_dfn(back_gaussian_splats['depth'])
 
 
             if cfg.data.category == "hydrants" or cfg.data.category == "teddybears":
@@ -266,8 +266,9 @@ def main(cfg: DictConfig):
             # ========= Logging =============
             with torch.no_grad():
                 if iteration % cfg.logging.loss_log == 0 and fabric.is_global_zero:
-                    wandb.log({"training_loss": np.log10(total_loss.item() + 1e-8)}, step=iteration)
-                    wandb.log({"depth_loss": np.log10(l_d.item() + 1e-8)}, step=iteration)
+                    if cfg.model.network_with_offset:
+                        wandb.log({"training_loss": np.log10(total_loss.item() + 1e-8)}, step=iteration)
+                        wandb.log({"depth_loss": np.log10(l_d.item() + 1e-8)}, step=iteration)
                     wandb.log({"training_l12_loss": np.log10(l12_loss_sum.item() + 1e-8)}, step=iteration)
                     if cfg.opt.lambda_lpips != 0:
                         wandb.log({"training_l12_loss": np.log10(l12_loss_sum.item() + 1e-8)}, step=iteration)
