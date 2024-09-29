@@ -141,11 +141,12 @@ def vis_image_preds(image_preds: dict, folder_out: str):
     colours = torch.cat([image_preds_reshaped["features_dc"].unsqueeze(-1), image_preds_reshaped["features_rest"]], dim=-1)
     colours = eval_sh(1, colours, ray_dirs)
 
-    colours = normalize_tensor(colours)
     opacity = normalize_tensor(image_preds_reshaped["opacity"])
-    xyz = image_preds_reshaped["xyz"] * opacity + 1- opacity
-    scaling = image_preds_reshaped["scaling"] * opacity + 1 - opacity
-
+    colours = normalize_tensor(colours * opacity + 1 - opacity)
+    xyz = normalize_tensor(image_preds_reshaped["xyz"] * opacity + 1 - opacity)
+    scaling = normalize_tensor(image_preds_reshaped["scaling"] * opacity + 1 - opacity)
+    depth = normalize_tensor(image_preds_reshaped['depth'].expand(64, 64, 3))
+    depthv2 = normalize_tensor(image_preds_reshaped['depth'].expand(64, 64, 3) * opacity + 1 - opacity)
 
     plt.imsave(os.path.join(folder_out, "colours.png"),
                colours.numpy())
@@ -155,7 +156,11 @@ def vis_image_preds(image_preds: dict, folder_out: str):
                xyz.numpy())
     plt.imsave(os.path.join(folder_out, "scaling.png"), 
                scaling.numpy())
-
+    plt.imsave(os.path.join(folder_out, "depth.png"), 
+               depth.numpy())
+    plt.imsave(os.path.join(folder_out, "depthv1.png"), 
+               depthv2.numpy())
+    
 def normalize_tensor(tensor):
     min_val = tensor.min()
     max_val = tensor.max()
