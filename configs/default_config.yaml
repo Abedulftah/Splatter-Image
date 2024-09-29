@@ -23,7 +23,7 @@ opt:
     - 0.999
   loss: l2
   imgs_per_obj: 4
-  ema: 
+  ema:
     use: true
     update_every: 10
     update_after_step: 100
@@ -44,10 +44,10 @@ model:
   xyz_bias: 0.0
   depth_scale: 1.0
   depth_bias: 0.0
-  network_without_offset: false
-  network_with_offset: true
+  network_without_offset: true
+  network_with_offset: false
   attention_resolutions:
-  - 16
+    - 16
   num_blocks: 4
   cross_view_attention: true
   base_dim: 128
