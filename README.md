@@ -191,6 +191,14 @@ Our results at 10k iter:
 
   ![alt text](Results/opacity_back.png) ![alt text](Results/colours_back.png) ![alt text](Results/scaling_back.png) ![alt text](Results/xyz_back.png)
 
+## Comparison
+
+| Our Model                                                                                                                                                                       | Original Model                                                                                                                                                                                      |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ![alt text](Results/comparison/our/o11.png) ![alt text](Results/comparison/our/o12.png) ![alt text](Results/comparison/our/o13.png) ![alt text](Results/comparison/our/o14.png) | ![alt text](Results/comparison/original/t11.png) ![alt text](Results/comparison/original/t12.png) ![alt text](Results/comparison/original/t13.png) ![alt text](Results/comparison/original/t14.png) |
+| ![alt text](Results/comparison/our/o21.png) ![alt text](Results/comparison/our/o22.png) ![alt text](Results/comparison/our/o23.png) ![alt text](Results/comparison/our/o24.png) | ![alt text](Results/comparison/original/t21.png) ![alt text](Results/comparison/original/t22.png) ![alt text](Results/comparison/original/t23.png) ![alt text](Results/comparison/original/t24.png) |
+| ![alt text](Results/comparison/our/o31.png) ![alt text](Results/comparison/our/o32.png) ![alt text](Results/comparison/our/o33.png) ![alt text](Results/comparison/our/o34.png) | ![alt text](Results/comparison/original/t31.png) ![alt text](Results/comparison/original/t32.png) ![alt text](Results/comparison/original/t33.png) ![alt text](Results/comparison/original/t34.png) |
+
 ## Separation result
 
 - Back side
@@ -217,4 +225,4 @@ Our results at 10k iter:
 
   ![alt text](Results/originalModel.gif)
 
-For additional details on how we accomplished it, you can find them [here.](https://campushaifaac-my.sharepoint.com/:p:/r/personal/aabedalf_campus_haifa_ac_il/_layouts/15/Doc.aspx?sourcedoc=%7B24BD5B33-02A3-47E1-B5CC-DAFE33A933FD%7D&file=Computer_vision_pres.pptx&action=edit&mobileredirect=true)
+For additional details on how we accomplished it, you can find them [here.](https://campushaifaac-my.sharepoint.com/:p:/g/personal/aabedalf_campus_haifa_ac_il/EZ0GipkLVs5Pu1l5vAdX1y0BBse90TwwPrSZlOqcxkTGVg?e=G2Ho18)
