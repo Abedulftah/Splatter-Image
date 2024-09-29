@@ -4,84 +4,60 @@ import os
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
 
-def show_point_cloud(xyz, colors, camera_centers):
-    app = gui.Application.instance
-    app.initialize()
+def show_point_cloud(xyz, colors, path):
     
     colors = colors.squeeze().squeeze(1)
     colors = (colors - colors.min()) / (colors.max() - colors.min())
     colors = colors.cpu().numpy()
     xyz = xyz.squeeze().cpu().numpy()
 
-    if not os.path.exists('front_xyz_latest_wo_off.npy'):
-        np.save("front_xyz_latest_wo_off.npy", xyz)
-        np.save("front_colors_latest_wo_off.npy", colors)
-    elif not os.path.exists('back_xyz_latest_wo_off.npy'):
-        np.save("back_xyz_latest_wo_off.npy", xyz)
-        np.save("back_colors_latest_wo_off.npy", colors)
-    else:
-        np.save("both_xyz_latest_wo_off.npy", xyz)
-        np.save("both_colors_latest_wo_off.npy", colors)
+    # Open the .ply file for writing
+    save_files(xyz, (colors * 255).astype(np.uint8), path)
 
+    # app = gui.Application.instance
+    # app.initialize()
+    # # point_cloud = o3d.io.read_point_cloud("output_with_colors.ply")
+    # point_cloud = o3d.geometry.PointCloud()
+    # point_cloud.points = o3d.utility.Vector3dVector(xyz)
+    # point_cloud.colors = o3d.utility.Vector3dVector(colors)
 
-    point_cloud = o3d.geometry.PointCloud()
-    point_cloud.points = o3d.utility.Vector3dVector(xyz)
-    point_cloud.colors = o3d.utility.Vector3dVector(colors)
+    # vis = o3d.visualization.O3DVisualizer("Gaussians", 1024, 768)
+    # vis.show_settings = True
+    # vis.add_geometry("Points", point_cloud)
 
-    vis = o3d.visualization.O3DVisualizer("Gaussians", 1024, 768)
-    vis.show_settings = True
-    vis.add_geometry("Points", point_cloud)
+    # vis.reset_camera_to_default()
 
-    vis.reset_camera_to_default()
+    # app.add_window(vis)
+    # app.run()
 
-    app.add_window(vis)
-    app.run()
+def save_files(xyz, colors, path):
+    with open(path, "w") as f:
+            # Write the PLY header
+            f.write("ply\n")
+            f.write("format ascii 1.0\n")
+            f.write(f"element vertex {xyz.shape[0]}\n")
+            f.write("property float x\n")
+            f.write("property float y\n")
+            f.write("property float z\n")
+            f.write("property uchar red\n")
+            f.write("property uchar green\n")
+            f.write("property uchar blue\n")
+            f.write("end_header\n")
+            
+            # Write the xyz and color data
+            for point, color in zip(xyz, colors):
+                f.write(f"{point[0]} {point[1]} {point[2]} {int(color[0])} {int(color[1])} {int(color[2])}\n")
 
+def vis_point_cloud():
+    for name in ['front', 'back', 'both']:
+        app = gui.Application.instance
+        app.initialize()
+        point_cloud = o3d.io.read_point_cloud(f"{name}.ply")
 
+        vis = o3d.visualization.O3DVisualizer('Gaussians', 1024, 768)
+        vis.show_settings = True
+        vis.add_geometry("Points", point_cloud)
 
-# list_xyz, list_colors, titles = [], [], ['front', 'back', 'both']
-# list_xyz.append(np.load("front_xyz_latest.npy"))
-# list_colors.append(np.load("front_colors_latest.npy"))
-
-# list_xyz.append(np.load("back_xyz_latest.npy"))
-# list_colors.append(np.load("back_colors_latest.npy"))
-
-# list_xyz.append(np.load("both_xyz_latest.npy"))
-# list_colors.append(np.load("both_colors_latest.npy"))
-
-# list_xyz_wo_off, list_colors_wo_off, titles_wo_off = [], [], ['front', 'back', 'both']
-# list_xyz_wo_off.append(np.load("front_xyz_latest_wo_off.npy"))
-# list_colors_wo_off.append(np.load("front_colors_latest_wo_off.npy"))
-
-# list_xyz_wo_off.append(np.load("back_xyz_latest_wo_off.npy"))
-# list_colors_wo_off.append(np.load("back_colors_latest_wo_off.npy"))
-
-# list_xyz_wo_off.append(np.load("both_xyz_latest_wo_off.npy"))
-# list_colors_wo_off.append(np.load("both_colors_latest_wo_off.npy"))
-
-# for xyz, color, title, xyz_wo_off, color_wo_off, title_wo_off in zip(list_xyz, list_colors, titles, list_xyz_wo_off, list_colors_wo_off, titles_wo_off):
-#     app = gui.Application.instance
-#     app.initialize()
-#     point_cloud = o3d.geometry.PointCloud()
-#     point_cloud.points = o3d.utility.Vector3dVector(xyz)
-#     point_cloud.colors = o3d.utility.Vector3dVector(color)
-
-#     point_cloud_wo_off = o3d.geometry.PointCloud()
-#     point_cloud_wo_off.points = o3d.utility.Vector3dVector(xyz_wo_off + 0.5)
-#     point_cloud_wo_off.colors = o3d.utility.Vector3dVector(color_wo_off)
-
-#     vis = o3d.visualization.O3DVisualizer(title, 1024, 768)
-#     vis.show_settings = True
-    
-#     # Add both point clouds to the same visualizer
-#     vis.add_geometry("Points", point_cloud)
-#     vis.add_geometry("Points Without Offset", point_cloud_wo_off)
-#     for point in xyz_wo_off:
-#         if point[0] != 0:
-#             vis.add_3d_label(point + 0.5, "point cloud without offset")
-#             break
-
-#     vis.reset_camera_to_default()
-
-#     app.add_window(vis)
-#     app.run()
+        vis.reset_camera_to_default()
+        app.add_window(vis)
+        app.run()
