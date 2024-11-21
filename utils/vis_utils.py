@@ -116,7 +116,7 @@ def vis_image_preds(image_preds: dict, folder_out: str):
         image_preds: a dictionary of xyz, opacity, scaling, rotation, features_dc and features_rest
     """
     image_preds_reshaped = {}
-    ray_dirs = (image_preds["xyz"].detach().cpu() / torch.norm(image_preds["xyz"].detach().cpu(), dim=-1, keepdim=True)).reshape(64, 64, 3)
+    ray_dirs = (image_preds["xyz"].detach().cpu() / torch.norm(image_preds["xyz"].detach().cpu(), dim=-1, keepdim=True)).reshape(128, 128, 3)
 
     for k, v in image_preds.items():
         image_preds_reshaped[k] = v
@@ -131,11 +131,11 @@ def vis_image_preds(image_preds: dict, folder_out: str):
             # )
             image_preds_reshaped[k] = normalize_tensor(image_preds_reshaped[k])
         if k != "features_rest":
-            image_preds_reshaped[k] = image_preds_reshaped[k].reshape(64, 64, -1).detach().cpu()
+            image_preds_reshaped[k] = image_preds_reshaped[k].reshape(128, 128, -1).detach().cpu()
         else:
-            image_preds_reshaped[k] = image_preds_reshaped[k].reshape(64, 64, 3, 3).detach().cpu().permute(0, 1, 3, 2)
+            image_preds_reshaped[k] = image_preds_reshaped[k].reshape(128, 128, 3, 3).detach().cpu().permute(0, 1, 3, 2)
         if k == "opacity":
-            image_preds_reshaped[k] = image_preds_reshaped[k].expand(64, 64, 3) 
+            image_preds_reshaped[k] = image_preds_reshaped[k].expand(128, 128, 3) 
 
 
     colours = torch.cat([image_preds_reshaped["features_dc"].unsqueeze(-1), image_preds_reshaped["features_rest"]], dim=-1)
@@ -145,8 +145,8 @@ def vis_image_preds(image_preds: dict, folder_out: str):
     colours = normalize_tensor(colours * opacity + 1 - opacity)
     xyz = normalize_tensor(image_preds_reshaped["xyz"] * opacity + 1 - opacity)
     scaling = normalize_tensor(image_preds_reshaped["scaling"] * opacity + 1 - opacity)
-    depth = normalize_tensor(image_preds_reshaped['depth'].expand(64, 64, 3))
-    depthv2 = normalize_tensor(image_preds_reshaped['depth'].expand(64, 64, 3) * opacity + 1 - opacity)
+    depth = normalize_tensor(image_preds_reshaped['depth'].expand(128, 128, 3))
+    depthv2 = normalize_tensor(image_preds_reshaped['depth'].expand(128, 128, 3) * opacity + 1 - opacity)
 
     plt.imsave(os.path.join(folder_out, "colours.png"),
                colours.numpy())

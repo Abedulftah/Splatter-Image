@@ -28,14 +28,14 @@ def main(cfg: DictConfig):
 
     torch.set_float32_matmul_precision('high')
     if cfg.general.mixed_precision:
-        fabric = Fabric(accelerator="cuda", devices=cfg.general.num_devices,
+        fabric = Fabric(accelerator="cuda", devices=cfg.general.num_devices, strategy="ddp",
                         precision="16-mixed")
     else:
-        fabric = Fabric(accelerator="cuda", devices=cfg.general.num_devices)
+        fabric = Fabric(accelerator="cuda", devices=cfg.general.num_devices, strategy="ddp")
     fabric.launch()
 
     if fabric.is_global_zero:
-        vis_dir = os.getcwd()
+        vis_dir = '/../users/korman/aabedalft/SRN/'
 
         dict_cfg = OmegaConf.to_container(
             cfg, resolve=True, throw_on_missing=True
@@ -113,10 +113,9 @@ def main(cfg: DictConfig):
     
     loss_dfn = DepthLossF()
 
-    if cfg.opt.lambda_lpips != 0:
-        lpips_fn = fabric.to_device(lpips_lib.LPIPS(net='vgg'))
-    lambda_lpips = cfg.opt.lambda_lpips
-    lambda_l12 = 1.0 - lambda_lpips
+    lpips_fn = None
+    lambda_l12 = 1.0
+    lambda_lpips = 0.0
 
     bg_color = [1, 1, 1] if cfg.data.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32)
@@ -160,9 +159,8 @@ def main(cfg: DictConfig):
     print("Beginning training")
     first_iter += 1
     iteration = first_iter
-    l_d = 0.0
     for num_epoch in range((cfg.opt.iterations + 1 - first_iter)// len(dataloader) + 1):
-
+        dataloader.sampler.set_epoch(num_epoch)
         for data in dataloader:
             iteration += 1
 
@@ -180,29 +178,29 @@ def main(cfg: DictConfig):
                 focals_pixels_pred = None
                 input_images = data["gt_images"][:, :cfg.data.input_images, ...]
 
-            forward_gaussian_splats, back_gaussian_splats = gaussian_predictor(input_images,
+            front_gaussian_splats, back_gaussian_splats = gaussian_predictor(input_images,
                                                 data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
                                                 rot_transform_quats,
                                                 focals_pixels_pred)
-            if cfg.model.network_with_offset:
-                l_d = loss_dfn(back_gaussian_splats['depth'])
 
+            l_d = loss_dfn(back_gaussian_splats['depth'])
 
+            # we need to check that.
             if cfg.data.category == "hydrants" or cfg.data.category == "teddybears":
                 # regularize very big gaussians
-                if len(torch.where(forward_gaussian_splats["scaling"] > 20)[0]) > 0:
+                if len(torch.where(front_gaussian_splats["scaling"] > 20)[0]) > 0:
                     big_gaussian_reg_loss = torch.mean(
-                        forward_gaussian_splats["scaling"][torch.where(forward_gaussian_splats["scaling"] > 20)] * 0.1)
+                        front_gaussian_splats["scaling"][torch.where(front_gaussian_splats["scaling"] > 20)] * 0.1)
                     print('Regularising {} big Gaussians on iteration {}'.format(
-                        len(torch.where(forward_gaussian_splats["scaling"] > 20)[0]), iteration))
+                        len(torch.where(front_gaussian_splats["scaling"] > 20)[0]), iteration))
                 else:
                     big_gaussian_reg_loss = 0.0
                 # regularize very small Gaussians
-                if len(torch.where(forward_gaussian_splats["scaling"] < 1e-5)[0]) > 0:
+                if len(torch.where(front_gaussian_splats["scaling"] < 1e-5)[0]) > 0:
                     small_gaussian_reg_loss = torch.mean(
-                        -torch.log(forward_gaussian_splats["scaling"][torch.where(forward_gaussian_splats["scaling"] < 1e-5)]) * 0.1)
+                        -torch.log(front_gaussian_splats["scaling"][torch.where(front_gaussian_splats["scaling"] < 1e-5)]) * 0.1)
                     print('Regularising {} small Gaussians on iteration {}'.format(
-                        len(torch.where(forward_gaussian_splats["scaling"] < 1e-5)[0]), iteration))
+                        len(torch.where(front_gaussian_splats["scaling"] < 1e-5)[0]), iteration))
                 else:
                     small_gaussian_reg_loss = 0.0
 
@@ -212,9 +210,9 @@ def main(cfg: DictConfig):
             gt_images = []
             for b_idx in range(data["gt_images"].shape[0]):
                 # Render
-                forward_gaussian_splat_batch = {k: v[b_idx].contiguous() for k, v in forward_gaussian_splats.items()}
+                front_gaussian_splat_batch = {k: v[b_idx].contiguous() for k, v in front_gaussian_splats.items()}
                 back_gaussian_splats_batch = {k: v[b_idx].contiguous() for k, v in back_gaussian_splats.items()}
-                gaussian_splat_batch = {'back': back_gaussian_splats_batch, 'forward': forward_gaussian_splat_batch}
+                gaussian_splat_batch = {'back': back_gaussian_splats_batch, 'front': front_gaussian_splat_batch}
                 # image at index 0 is training, remaining images are targets
                 # Rendering is done sequentially because gaussian rasterization code
                 # does not support batching
@@ -237,18 +235,27 @@ def main(cfg: DictConfig):
             rendered_images = torch.stack(rendered_images, dim=0)
             gt_images = torch.stack(gt_images, dim=0)
             # Loss computation
-            l12_loss_sum = loss_fn(rendered_images, gt_images) 
-            if cfg.opt.lambda_lpips != 0:
+            l12_loss_sum = loss_fn(rendered_images, gt_images)
+            if lambda_lpips == 0 and iteration >= cfg.opt.start_lpips_after:
+                lpips_fn = fabric.to_device(lpips_lib.LPIPS(net='vgg'))
+                lambda_lpips = cfg.opt.lambda_lpips
+                lambda_l12 -= lambda_lpips
+                l.clear()
+                l.append({'params': gaussian_predictor.network_wo_offset.parameters(), 
+                    'lr': cfg.opt.base_lr*0.1})
+                optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15, 
+                                            betas=cfg.opt.betas)
+            elif lambda_lpips != 0:
                 lpips_loss_sum = torch.mean(
                     lpips_fn(rendered_images * 2 - 1, gt_images * 2 - 1),
                     )
 
-            total_loss = l12_loss_sum * lambda_l12 + lpips_loss_sum * lambda_lpips + l_d 
+            total_loss = l12_loss_sum * lambda_l12 + lpips_loss_sum * lambda_lpips + l_d
             if cfg.data.category == "hydrants" or cfg.data.category == "teddybears":
                 total_loss = total_loss + big_gaussian_reg_loss + small_gaussian_reg_loss
 
             assert not total_loss.isnan(), "Found NaN loss!"
-            print("finished forward {} on process {}".format(iteration, fabric.global_rank))
+            print("finished front {} on process {}".format(iteration, fabric.global_rank))
             fabric.backward(total_loss)
 
             # ============ Optimization ===============
@@ -266,13 +273,13 @@ def main(cfg: DictConfig):
             # ========= Logging =============
             with torch.no_grad():
                 if iteration % cfg.logging.loss_log == 0 and fabric.is_global_zero:
-                    if cfg.model.network_with_offset:
-                        wandb.log({"training_loss": np.log10(total_loss.item() + 1e-8)}, step=iteration)
-                        wandb.log({"depth_loss": np.log10(l_d.item() + 1e-8)}, step=iteration)
                     wandb.log({"training_l12_loss": np.log10(l12_loss_sum.item() + 1e-8)}, step=iteration)
-                    if cfg.opt.lambda_lpips != 0:
-                        wandb.log({"training_l12_loss": np.log10(l12_loss_sum.item() + 1e-8)}, step=iteration)
+                    if cfg.opt.network_with_offset:
                         wandb.log({"training_lpips_loss": np.log10(lpips_loss_sum.item() + 1e-8)}, step=iteration)
+                        wandb.log({"depth_loss": np.log10(l_d.item() + 1e-8)}, step=iteration)
+                    if cfg.opt.lambda_lpips != 0:
+                        wandb.log({"training_lpips_loss": np.log10(lpips_loss_sum.item() + 1e-8)}, step=iteration)
+                        wandb.log({"training_loss": np.log10(total_loss.item() + 1e-8)}, step=iteration)
                     if cfg.data.category == "hydrants" or cfg.data.category == "teddybears":
                         if type(big_gaussian_reg_loss) == float:
                             brl_for_log = big_gaussian_reg_loss
@@ -312,14 +319,14 @@ def main(cfg: DictConfig):
                         focals_pixels_pred = None
                         input_images = vis_data["gt_images"][:, :cfg.data.input_images, ...]
 
-                    forward_gaussian_splats, back_gaussian_splats = gaussian_predictor(input_images,
-                                                        data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
+                    front_gaussian_splats, back_gaussian_splats = gaussian_predictor(input_images,
+                                                        vis_data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
                                                         rot_transform_quats,
                                                         focals_pixels_pred)
                     
-                    forward_gaussian_splat_batch = {k: v[b_idx].contiguous() for k, v in forward_gaussian_splats.items()}
-                    back_gaussian_splats_batch = {k: v[b_idx].contiguous() for k, v in back_gaussian_splats.items()}
-                    gaussian_splat_batch = {'back': back_gaussian_splats_batch, 'forward': forward_gaussian_splat_batch}
+                    front_gaussian_splat_batch = {k: v[0].contiguous() for k, v in front_gaussian_splats.items()}
+                    back_gaussian_splats_batch = {k: v[0].contiguous() for k, v in back_gaussian_splats.items()}
+                    gaussian_splat_batch = {'back': back_gaussian_splats_batch, 'front': front_gaussian_splat_batch}
 
                     test_loop = []
                     test_loop_gt = []
