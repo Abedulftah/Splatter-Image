@@ -225,4 +225,4 @@ Our results at 10k iter:
 
   ![alt text](Results/originalModel.gif)
 
-For additional details on how we accomplished it, you can find them [here.]([https://campushaifaac-my.sharepoint.com/:p:/g/personal/aabedalf_campus_haifa_ac_il/EeFzoaqO18NDtShusC9I50UByg3J_TRp_-gEHQvEqMQ7xA?e=6LakTo])
+For additional details on how we accomplished it, you can find them [here.](https://campushaifaac-my.sharepoint.com/:p:/g/personal/aabedalf_campus_haifa_ac_il/EeFzoaqO18NDtShusC9I50UByg3J_TRp_-gEHQvEqMQ7xA?e=6LakTo)
